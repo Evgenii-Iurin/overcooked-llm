@@ -1,0 +1,118 @@
+[tool.poetry]
+name = "overcooked-llm"
+version = "0.1.0"
+description = "Overcooked LLM"
+authors = ["Evgenii Iurin"]
+readme = "README.md"
+packages = [{ include = "llm_trainer", from = "src"}]
+
+[tool.poetry.dependencies]
+python = ">=3.11,<3.14"
+loguru = ">=0.7.3,<0.8.0"
+python-dotenv = ">=1.1.1,<2.0.0"
+pre-commit = ">=4.3.0,<5.0.0"
+pydantic-settings = ">=2.10.1,<3.0.0"
+ruff = ">=0.13.0,<0.14.0"
+rich = ">=14.1.0,<15.0.0"
+ipywidgets = "^8.1.7"
+pandas = "^2.3.3"
+seaborn = "^0.13.2"
+matplotlib = "^3.10.8"
+openpyxl = "^3.1.2"
+
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "C90",
+    "I",
+    "N",
+    "UP",
+    "YTT",
+    "S",
+    "BLE",
+    "FBT",
+    "B",
+    "A",
+    "C4",
+    "DTZ",
+    "T10",
+    "EM",
+    "EXE",
+    "FA",
+    "ISC",
+    "ICN",
+    "G",
+    "INP",
+    "PIE",
+    "T20",
+    "PYI",
+    "PT",
+    "Q",
+    "RSE",
+    "RET",
+    "SLF",
+    "SLOT",
+    "SIM",
+    "TID",
+    "TCH",
+    "INT",
+    "ARG",
+    "PTH",
+    "TD",
+    "FIX",
+    "ERA",
+    "PD",
+    "PGH",
+    "PL",
+    "TRY",
+    "FLY",
+    "NPY",
+    "AIR",
+    "PERF",
+    "FURB",
+    "LOG",
+    "RUF",
+]
+ignore = [
+    "S101",
+    "T201",
+    "PLR0913",
+    "PLR0912",
+    "PLR0915",
+    "COM812",
+    "ISC001",
+    "BLE001",
+    "B008",
+    "TRY003",
+    "TRY301",
+    "EM101",
+    "EM102",
+    "B904",
+    "TRY400",
+    "G004",
+    "N803",
+    "N815",
+    "ARG001",
+    "PTH123",
+    "PD901",
+    "INP001",
+    "W291",
+    "DTZ005",
+    "PLE1142",
+    "PERF401",
+    "TRY300",
+]
+
+[tool.ruff.lint.isort]
+force-single-line = false
+known-first-party = ["overcooked_llm"]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
