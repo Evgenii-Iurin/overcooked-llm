@@ -23,5 +23,5 @@
     "python.analysis.autoFormatStrings": true,
     "editor.semanticHighlighting.enabled": true,
     "python.analysis.displayEnglishDiagnostics": true,
-    "workbench.colorTheme": "Quiet Light"
+    "workbench.colorTheme": "Monokai"
 }
