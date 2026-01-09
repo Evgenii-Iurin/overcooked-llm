@@ -3,7 +3,7 @@
 import re
 from typing import List, Dict, Optional
 from .communication import CommunicationMessage, ActionPlan, LLMResponse
-from .overcooked_llm_wrapper import Trajectory, TrajectoryStep
+from .trajectory import Trajectory, TrajectoryStep
 
 
 def environment_reward_func(
@@ -102,6 +102,18 @@ def plan_executability_reward_func(
             reward += 1.0
         else:
             reward -= 0.5
+        
+        # Check if plans passed validation (higher reward than just parsing)
+        if step.plan_valid_agent0:
+            reward += 1.5  # Validation passed
+        if step.plan_valid_agent1:
+            reward += 1.5
+        
+        # Check if plans were successfully executed by executor (highest reward)
+        if step.plan_executed_agent0:
+            reward += 2.0  # Successfully executed
+        if step.plan_executed_agent1:
+            reward += 2.0
         
         # Check if plans have valid actions
         valid_actions = [
@@ -250,11 +262,26 @@ def compute_step_rewards(
     rewards["agent_0"] += format_rewards[0] * 0.1
     rewards["agent_1"] += format_rewards[1] * 0.1
     
-    # Plan quality (individual)
+    # Plan parsing (individual) - small reward for parsing
     if step.llm_response_agent0.plan:
         rewards["agent_0"] += 0.1
+    
     if step.llm_response_agent1.plan:
         rewards["agent_1"] += 0.1
+    
+    # Plan validation (individual) - medium reward for validation
+    if step.plan_valid_agent0:
+        rewards["agent_0"] += 0.3
+    
+    if step.plan_valid_agent1:
+        rewards["agent_1"] += 0.3
+    
+    # Plan execution (individual) - highest reward for successful execution
+    if step.plan_executed_agent0:
+        rewards["agent_0"] += 0.5
+    
+    if step.plan_executed_agent1:
+        rewards["agent_1"] += 0.5
     
     return rewards
 

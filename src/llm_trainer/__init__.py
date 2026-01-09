@@ -16,11 +16,8 @@ from .communication import (
     SYSTEM_PROMPT,
 )
 from .action_executor import ActionExecutor
-from .overcooked_llm_wrapper import (
-    OvercookedLLMWrapper,
-    Trajectory,
-    TrajectoryStep,
-)
+from .trajectory import Trajectory, TrajectoryStep
+from .overcooked_llm_wrapper import OvercookedLLMWrapper
 from .reward_functions import (
     environment_reward_func,
     coordination_reward_func,
@@ -33,6 +30,13 @@ from .dataset_generator import (
     generate_trajectories,
     trajectory_to_grpo_dataset,
     generate_grpo_dataset,
+)
+from .artifacts import (
+    save_trajectories,
+    load_trajectories,
+    save_dataset,
+    load_dataset,
+    save_training_metadata,
 )
 from .train_grpo import train_grpo_overcooked
 from .evaluation import (
@@ -73,6 +77,12 @@ __all__ = [
     "generate_trajectories",
     "trajectory_to_grpo_dataset",
     "generate_grpo_dataset",
+    # Artifacts
+    "save_trajectories",
+    "load_trajectories",
+    "save_dataset",
+    "load_dataset",
+    "save_training_metadata",
     # Training
     "train_grpo_overcooked",
     # Evaluation

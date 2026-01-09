@@ -11,6 +11,90 @@ from loguru import logger
 from .dataset_generator import generate_grpo_dataset
 from .reward_functions import format_reward_func
 from .overcooked_llm_wrapper import OvercookedLLMWrapper
+from jaxmarl.environments.overcooked_v2.common import StaticObject, DynamicObject
+
+
+def print_environment_grid(env, state):
+    """Print the environment grid with symbols.
+    
+    Args:
+        env: OvercookedV2 environment
+        state: Current state
+    """
+    import numpy as np
+    
+    height, width = env.height, env.width
+    grid = np.array(state.grid)
+    static_objects = grid[:, :, 0]
+    dynamic_objects = grid[:, :, 1]
+    
+    # Create symbol grid
+    symbols = [[' ' for _ in range(width)] for _ in range(height)]
+    
+    # Map static objects to symbols
+    for y in range(height):
+        for x in range(width):
+            static_obj = int(static_objects[y, x])
+            
+            if static_obj == StaticObject.WALL:
+                symbols[y][x] = 'W'
+            elif static_obj == StaticObject.GOAL:
+                symbols[y][x] = 'X'
+            elif static_obj == StaticObject.POT:
+                # Check if pot has contents
+                pot_content = int(dynamic_objects[y, x])
+                if pot_content & DynamicObject.COOKED:
+                    symbols[y][x] = 'P'  # Cooked pot
+                elif pot_content != 0:
+                    symbols[y][x] = 'p'  # Pot with ingredients
+                else:
+                    symbols[y][x] = 'P'  # Empty pot
+            elif static_obj == StaticObject.PLATE_PILE:
+                symbols[y][x] = 'B'
+            elif static_obj == StaticObject.RECIPE_INDICATOR:
+                symbols[y][x] = 'R'
+            elif static_obj == StaticObject.BUTTON_RECIPE_INDICATOR:
+                symbols[y][x] = 'L'
+            elif StaticObject.is_ingredient_pile(static_obj):
+                ing_idx = static_obj - StaticObject.INGREDIENT_PILE_BASE
+                symbols[y][x] = str(ing_idx)
+            elif static_obj == StaticObject.EMPTY:
+                # Check for dynamic objects on empty cells
+                dyn_obj = int(dynamic_objects[y, x])
+                if dyn_obj != 0:
+                    if dyn_obj == DynamicObject.PLATE:
+                        symbols[y][x] = 'b'  # Plate on counter
+                    elif dyn_obj & DynamicObject.COOKED:
+                        symbols[y][x] = 'D'  # Cooked dish
+                    else:
+                        # Check if it's an ingredient (using bit manipulation)
+                        if (dyn_obj >> 2) != 0 and (dyn_obj & DynamicObject.PLATE) == 0:
+                            symbols[y][x] = 'i'  # Ingredient on counter
+                        else:
+                            symbols[y][x] = ' '  # Unknown dynamic object
+                else:
+                    symbols[y][x] = ' '
+    
+    # Place agents
+    for agent_id in range(env.num_agents):
+        agent_x = int(state.agents.pos.x[agent_id])
+        agent_y = int(state.agents.pos.y[agent_id])
+        if 0 <= agent_x < width and 0 <= agent_y < height:
+            # Use A for agent 0, a for agent 1, or numbers
+            if agent_id == 0:
+                symbols[agent_y][agent_x] = 'A'
+            else:
+                symbols[agent_y][agent_x] = 'a'
+    
+    # Print grid
+    logger.info("Environment Grid:")
+    logger.info("=" * (width + 2))
+    for row in symbols:
+        logger.info("|" + "".join(row) + "|")
+    logger.info("=" * (width + 2))
+    logger.info("Legend: W=Wall, X=Goal, P=Pot, p=Pot(cooking), B=Plate pile, b=Plate, "
+                "0-9=Ingredient piles, i=Ingredient, D=Dish, R=Recipe indicator, "
+                "L=Button indicator, A/a=Agents, ' '=Empty")
 
 
 def create_llm_generate_fn(model, tokenizer, vllm_engine=None):
@@ -124,6 +208,11 @@ def train_grpo_overcooked(
     logger.info(f"Number of agents: {env.num_agents}")
     logger.info(f"Grid size: {env.width}x{env.height}")
     logger.info(f"Max steps per episode: {max_steps}")
+    
+    # Print initial environment state (use separate key for visualization)
+    viz_key = jax.random.PRNGKey(999)  # Fixed key for visualization
+    obs, state = env.reset(viz_key)
+    print_environment_grid(env, state)
     
     # Load tokenizer
     logger.info(f"Loading tokenizer from: {model_name}")
@@ -258,6 +347,9 @@ def train_grpo_overcooked(
             max_steps=max_steps,
             reward_strategy="episode_shared",
             rng_key=data_key,
+            save_artifacts=True,
+            output_dir=output_dir,
+            iteration=iteration,
         )
         
         # Calculate statistics

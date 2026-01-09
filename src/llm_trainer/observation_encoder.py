@@ -132,6 +132,66 @@ def encode_observation(
     dynamic_channel = obs_np[:, :, 1]
     extra_channel = obs_np[:, :, 2] if obs_np.shape[2] > 2 else np.zeros_like(static_channel)
     
+    # Calculate relative positions if using partial observability
+    if agent_view_size is not None:
+        # In partial observability, coordinates are relative to agent at center
+        center_x = agent_view_size
+        center_y = agent_view_size
+    else:
+        # In full observability, use absolute coordinates
+        center_x = agent_pos[0]
+        center_y = agent_pos[1]
+    
+    # Helper function to calculate distance and direction
+    def get_relative_info(obj_x, obj_y, agent_x, agent_y, agent_dir):
+        """Calculate relative position, distance, and direction to object."""
+        if agent_view_size is not None:
+            # Relative to agent at center of view
+            rel_x = obj_x - center_x
+            rel_y = obj_y - center_y
+            abs_x = agent_x + rel_x
+            abs_y = agent_y + rel_y
+        else:
+            # Absolute coordinates
+            rel_x = obj_x - agent_x
+            rel_y = obj_y - agent_y
+            abs_x = obj_x
+            abs_y = obj_y
+        
+        # Calculate Manhattan distance
+        distance = abs(rel_x) + abs(rel_y)
+        
+        # Calculate direction relative to agent's facing direction
+        # Directions: 0=UP, 1=DOWN, 2=RIGHT, 3=LEFT
+        dir_vectors = [(0, -1), (0, 1), (1, 0), (-1, 0)]
+        agent_fwd = dir_vectors[agent_dir]
+        
+        # Determine relative direction
+        if rel_x == 0 and rel_y == 0:
+            direction = "at your position"
+        elif rel_x == 0:
+            if rel_y < 0:
+                direction = "north" if agent_dir != 0 else "ahead"
+            else:
+                direction = "south" if agent_dir != 1 else "ahead"
+        elif rel_y == 0:
+            if rel_x > 0:
+                direction = "east" if agent_dir != 2 else "ahead"
+            else:
+                direction = "west" if agent_dir != 3 else "ahead"
+        else:
+            # Diagonal direction
+            if rel_y < 0 and rel_x > 0:
+                direction = "northeast"
+            elif rel_y < 0 and rel_x < 0:
+                direction = "northwest"
+            elif rel_y > 0 and rel_x > 0:
+                direction = "southeast"
+            else:
+                direction = "southwest"
+        
+        return abs_x, abs_y, distance, direction
+    
     # Find objects in the observation
     objects = []
     
@@ -155,7 +215,14 @@ def encode_observation(
                     ing_count = DynamicObject.ingredient_count(pot_content)
                     pot_state = f"has {ing_count} ingredients"
                 
-                objects.append(f"pot at ({x}, {y}) - {pot_state}")
+                # Get relative position info
+                abs_x, abs_y, dist, direction = get_relative_info(
+                    x, y, agent_pos[0], agent_pos[1], agent_dir
+                )
+                objects.append(
+                    f"pot at ({abs_x}, {abs_y}) - {pot_state} "
+                    f"[distance: {dist} steps, {direction} from you]"
+                )
     
     # Find ingredient piles
     ingredient_piles = []
@@ -164,7 +231,14 @@ def encode_observation(
             if StaticObject.is_ingredient_pile(static_channel[y, x]):
                 ing_idx = static_channel[y, x] - StaticObject.INGREDIENT_PILE_BASE
                 ingredient_piles.append((ing_idx, x, y))
-                objects.append(f"ingredient{ing_idx} pile at ({x}, {y})")
+                # Get relative position info
+                abs_x, abs_y, dist, direction = get_relative_info(
+                    x, y, agent_pos[0], agent_pos[1], agent_dir
+                )
+                objects.append(
+                    f"ingredient{ing_idx} pile at ({abs_x}, {abs_y}) "
+                    f"[distance: {dist} steps, {direction} from you]"
+                )
     
     # Find plate pile
     plate_piles = []
@@ -172,7 +246,14 @@ def encode_observation(
         for x in range(width):
             if static_channel[y, x] == StaticObject.PLATE_PILE:
                 plate_piles.append((x, y))
-                objects.append(f"plate pile at ({x}, {y})")
+                # Get relative position info
+                abs_x, abs_y, dist, direction = get_relative_info(
+                    x, y, agent_pos[0], agent_pos[1], agent_dir
+                )
+                objects.append(
+                    f"plate pile at ({abs_x}, {abs_y}) "
+                    f"[distance: {dist} steps, {direction} from you]"
+                )
     
     # Find goal
     goals = []
@@ -180,7 +261,14 @@ def encode_observation(
         for x in range(width):
             if static_channel[y, x] == StaticObject.GOAL:
                 goals.append((x, y))
-                objects.append(f"goal (delivery location) at ({x}, {y})")
+                # Get relative position info
+                abs_x, abs_y, dist, direction = get_relative_info(
+                    x, y, agent_pos[0], agent_pos[1], agent_dir
+                )
+                objects.append(
+                    f"goal (delivery location) at ({abs_x}, {abs_y}) "
+                    f"[distance: {dist} steps, {direction} from you]"
+                )
     
     # Find recipe indicator
     recipe_indicators = []
@@ -188,12 +276,26 @@ def encode_observation(
         for x in range(width):
             if static_channel[y, x] == StaticObject.RECIPE_INDICATOR:
                 recipe_indicators.append((x, y))
-                objects.append(f"recipe indicator at ({x}, {y}) showing recipe: {recipe_desc}")
+                # Get relative position info
+                abs_x, abs_y, dist, direction = get_relative_info(
+                    x, y, agent_pos[0], agent_pos[1], agent_dir
+                )
+                objects.append(
+                    f"recipe indicator at ({abs_x}, {abs_y}) showing recipe: {recipe_desc} "
+                    f"[distance: {dist} steps, {direction} from you]"
+                )
             elif static_channel[y, x] == StaticObject.BUTTON_RECIPE_INDICATOR:
                 recipe_indicators.append((x, y))
                 is_active = extra_channel[y, x] > 0 if extra_channel is not None else False
                 status = "active" if is_active else "inactive"
-                objects.append(f"button recipe indicator at ({x}, {y}) - {status}")
+                # Get relative position info
+                abs_x, abs_y, dist, direction = get_relative_info(
+                    x, y, agent_pos[0], agent_pos[1], agent_dir
+                )
+                objects.append(
+                    f"button recipe indicator at ({abs_x}, {abs_y}) - {status} "
+                    f"[distance: {dist} steps, {direction} from you]"
+                )
     
     # Build description
     parts = []
@@ -201,19 +303,24 @@ def encode_observation(
     # Agent state
     if agent_view_size is None:
         parts.append(f"Agent at position ({agent_pos[0]}, {agent_pos[1]}), facing {direction}")
+        parts.append(f"Grid size: {width}x{height} (full observability)")
     else:
-        parts.append(f"Agent at center of view (view radius: {agent_view_size}), facing {direction}")
+        parts.append(f"Agent at center of view (view radius: {agent_view_size} in each direction), facing {direction}")
+        parts.append(f"View size: {width}x{height} (partial observability - you can see {agent_view_size} blocks in each direction)")
+        parts.append(f"⚠️ Objects outside your view are not visible. You may need to explore to find them.")
     
     parts.append(f"Holding: {inventory_desc}")
     parts.append(f"Current recipe requires: {recipe_desc}")
     
     # Visible objects
     if objects:
-        parts.append("Visible objects:")
+        parts.append(f"\nVisible objects ({len(objects)} total):")
         for obj in objects:
             parts.append(f"  - {obj}")
     else:
-        parts.append("No visible objects (only walls or empty space)")
+        parts.append("\nNo visible objects (only walls or empty space)")
+        if agent_view_size is not None:
+            parts.append("⚠️ You may need to move to see more of the environment.")
     
     # Check for other agents (if visible)
     other_agents = []
@@ -223,8 +330,18 @@ def encode_observation(
                 other_agents.append((x, y))
     
     if other_agents:
-        parts.append(f"Other agent(s) visible at: {', '.join([f'({x}, {y})' for x, y in other_agents])}")
+        agent_info = []
+        for x, y in other_agents:
+            abs_x, abs_y, dist, direction = get_relative_info(
+                x, y, agent_pos[0], agent_pos[1], agent_dir
+            )
+            agent_info.append(f"({abs_x}, {abs_y}) [distance: {dist} steps, {direction} from you]")
+        parts.append(f"\nOther agent(s) visible at: {', '.join(agent_info)}")
+    else:
+        if agent_view_size is not None:
+            parts.append("\nOther agent not visible in current view (may be outside your view range)")
     
+
     return "\n".join(parts)
 
 
@@ -245,9 +362,12 @@ def encode_state_for_agent(
     Returns:
         Text description of agent's observation
     """
-    # Get agent's observation
-    obs_dict = env.get_obs(state)
-    obs = obs_dict[f"agent_{agent_id}"]
+    # Use state.grid directly instead of processed observation
+    # state.grid has shape (height, width, 3) where:
+    # - channel 0: static objects (walls, pots, goals, etc.)
+    # - channel 1: dynamic objects (ingredients, plates, etc.)
+    # - channel 2: extra info (pot timers, etc.)
+    grid = state.grid
     
     # Get agent state
     agent_pos = (int(state.agents.pos.x[agent_id]), int(state.agents.pos.y[agent_id]))
@@ -258,9 +378,17 @@ def encode_state_for_agent(
     recipe_encoding = int(state.recipe)
     num_ingredients = env.layout.num_ingredients
     
-    # Encode observation
+    # Convert grid to numpy for easier processing
+    grid_np = np.array(grid)
+    static_channel = grid_np[:, :, 0]
+    dynamic_channel = grid_np[:, :, 1]
+    extra_channel = grid_np[:, :, 2]
+    
+    height, width = static_channel.shape
+    
+    # Encode observation using state.grid directly
     return encode_observation(
-        obs=obs,
+        obs=grid,  # Pass the full grid
         agent_pos=agent_pos,
         agent_dir=agent_dir,
         inventory=inventory,

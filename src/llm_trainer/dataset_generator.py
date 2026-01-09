@@ -7,7 +7,8 @@ from datasets import Dataset
 from jaxmarl.environments.overcooked_v2.overcooked import OvercookedV2
 from loguru import logger
 
-from .overcooked_llm_wrapper import OvercookedLLMWrapper, Trajectory
+from .overcooked_llm_wrapper import OvercookedLLMWrapper
+from .trajectory import Trajectory
 from .reward_functions import (
     compute_combined_reward,
     compute_step_rewards,
@@ -136,6 +137,9 @@ def generate_grpo_dataset(
     max_steps: int = 400,
     reward_strategy: str = "episode_shared",
     rng_key: Optional[jax.random.PRNGKey] = None,
+    save_artifacts: bool = True,
+    output_dir: Optional[str] = None,
+    iteration: Optional[int] = None,
 ) -> Dataset:
     """Generate GRPO dataset from environment rollouts.
     
@@ -146,6 +150,9 @@ def generate_grpo_dataset(
         max_steps: Maximum steps per episode
         reward_strategy: Reward assignment strategy
         rng_key: Random key for environment
+        save_artifacts: Whether to save trajectories and dataset to disk
+        output_dir: Output directory for artifacts (required if save_artifacts=True)
+        iteration: Optional iteration number for artifact naming
         
     Returns:
         GRPO-compatible dataset
@@ -159,12 +166,22 @@ def generate_grpo_dataset(
         rng_key=rng_key,
     )
     
+    # Save trajectories if requested
+    if save_artifacts and output_dir:
+        from .artifacts import save_trajectories
+        save_trajectories(trajectories, output_dir, iteration=iteration)
+    
     # Convert to dataset
     dataset = trajectory_to_grpo_dataset(
         trajectories=trajectories,
         env=env,
         reward_strategy=reward_strategy,
     )
+    
+    # Save dataset if requested
+    if save_artifacts and output_dir:
+        from .artifacts import save_dataset
+        save_dataset(dataset, output_dir, iteration=iteration)
     
     return dataset
 

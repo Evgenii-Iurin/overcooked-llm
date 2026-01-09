@@ -63,6 +63,7 @@ def format_agent_prompt(
     obs_text: str,
     agent_id: int,
     conversation_history: List[CommunicationMessage],
+    previous_validation_errors: List[str] = None,
     other_agent_id: int = None,
 ) -> List[Dict[str, str]]:
     """Format prompt for a single agent with their observation and conversation history.
@@ -71,6 +72,7 @@ def format_agent_prompt(
         obs_text: Text description of agent's observation
         agent_id: Current agent's ID (0 or 1)
         conversation_history: List of previous messages between agents
+        previous_validation_errors: List of validation error messages from previous step
         other_agent_id: Other agent's ID (defaults to 1 - agent_id)
         
     Returns:
@@ -86,9 +88,25 @@ def format_agent_prompt(
     # Add conversation history
     if conversation_history:
         history_text = "Conversation History:\n"
-        for msg in conversation_history[-5:]:  # Last 5 messages
-            history_text += f"[{msg.from_agent} to {msg.to_agent}]: {msg.message}\n"
+        for msg in conversation_history[-10:]:  # Last 10 messages (increased to include system messages)
+            # Format system messages differently
+            if msg.from_agent == "system":
+                history_text += f"⚠️ SYSTEM: {msg.message}\n"
+            else:
+                history_text += f"[{msg.from_agent} to {msg.to_agent}]: {msg.message}\n"
         messages.append({"role": "user", "content": history_text})
+    
+    # Add validation error feedback if any
+    if previous_validation_errors:
+        error_text = "⚠️ Previous Plan Validation Errors:\n"
+        for error in previous_validation_errors:
+            error_text += f"- {error}\n"
+        error_text += "\nPlease ensure your plan includes all required fields:\n"
+        error_text += "- For 'cook_dish': specify <ingredients>[0, 1, 2]</ingredients> (exactly 3 ingredients)\n"
+        error_text += "- For 'pickup_ingredient': specify <ingredients>[0]</ingredients> (at least one ingredient)\n"
+        error_text += "- For 'move_to': specify <target_location>(x, y)</target_location>\n"
+        error_text += "- All target locations must be within environment bounds\n"
+        messages.append({"role": "user", "content": error_text})
     
     # Add current observation
     obs_prompt = f"""You are agent_{agent_id}. The other agent is agent_{other_agent_id}.
@@ -241,28 +259,66 @@ def validate_plan(plan: ActionPlan, env, agent_pos: Tuple[int, int]) -> Tuple[bo
     if plan.action not in valid_actions:
         return False, f"Invalid action: {plan.action}"
     
-    # Validate action-specific requirements
+    
     if plan.action == "cook_dish":
-        if plan.ingredients is None or len(plan.ingredients) != 3:
-            return False, "cook_dish requires exactly 3 ingredients"
-        if plan.target_location is None:
-            return False, "cook_dish requires target_location (pot position)"
+        # target_location is optional (executor finds nearest pot)
+        # but ingredients list is useful for planning
+        if plan.ingredients is None or len(plan.ingredients) == 0:
+            return False, "cook_dish should specify ingredients (executor can find pot automatically)"
     
     if plan.action == "pickup_ingredient":
+        # target_location is optional (executor finds nearest pile)
+        # but ingredients list is required
         if plan.ingredients is None or len(plan.ingredients) == 0:
-            return False, "pickup_ingredient requires at least one ingredient"
-        if plan.target_location is None:
-            return False, "pickup_ingredient requires target_location (pile position)"
+            return False, "pickup_ingredient requires at least one ingredient index"
     
     if plan.action == "move_to":
+        # target_location is required for move_to
         if plan.target_location is None:
             return False, "move_to requires target_location"
     
-    # Check if target location is within bounds
+    # Check if target location is within bounds (if provided)
     if plan.target_location:
         x, y = plan.target_location
         if x < 0 or x >= env.width or y < 0 or y >= env.height:
             return False, f"Target location ({x}, {y}) is out of bounds"
     
     return True, ""
+
+
+def get_plan_warnings(plan: ActionPlan, env) -> List[str]:
+    """Get warnings about incomplete but potentially executable plans.
+    
+    Args:
+        plan: Action plan to check
+        env: OvercookedV2 environment
+        
+    Returns:
+        List of warning messages
+    """
+    warnings = []
+    
+    if plan is None:
+        return warnings
+    
+    # Check for missing but helpful information
+    if plan.action == "cook_dish":
+        if plan.target_location is None:
+            warnings.append("cook_dish missing target_location (will find nearest pot)")
+        if plan.ingredients is None or len(plan.ingredients) == 0:
+            warnings.append("cook_dish missing ingredients list")
+        elif len(plan.ingredients) != 3:
+            warnings.append(f"cook_dish has {len(plan.ingredients)} ingredients (recipe needs 3)")
+    
+    if plan.action == "pickup_ingredient":
+        if plan.target_location is None:
+            warnings.append("pickup_ingredient missing target_location (will find nearest pile)")
+        if plan.ingredients is None or len(plan.ingredients) == 0:
+            warnings.append("pickup_ingredient missing ingredients list")
+    
+    if plan.action == "deliver_dish":
+        # No required fields, but check if agent likely has a dish
+        pass
+    
+    return warnings
 

@@ -3,7 +3,7 @@
 import re
 from typing import List, Dict, Optional
 from dataclasses import dataclass
-from .overcooked_llm_wrapper import Trajectory, TrajectoryStep
+from .trajectory import Trajectory, TrajectoryStep
 from .communication import CommunicationMessage
 
 
