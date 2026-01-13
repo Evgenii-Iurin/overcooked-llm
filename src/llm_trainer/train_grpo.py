@@ -170,6 +170,7 @@ def train_grpo_overcooked(
     max_completion_length: int = 256,
     vllm_gpu_memory_utilization: float = 0.3,
     rng_key: Optional[jax.random.PRNGKey] = None,
+    use_mlflow: bool = False,
 ):
     """Train LLM using GRPO on Overcooked environment.
     
@@ -180,7 +181,8 @@ def train_grpo_overcooked(
         num_episodes_per_iteration: Episodes to collect per training iteration
         max_steps: Maximum steps per episode
         num_iterations: Number of training iterations
-        output_dir: Output directory for checkpoints
+        output_dir: Output directory for checkpoints, models, and all artifacts.
+                   Artifacts (trajectories, datasets) will be saved to {output_dir}/artifacts/
         use_vllm: Whether to use vLLM for inference
         learning_rate: Learning rate
         per_device_train_batch_size: Batch size per device
@@ -190,6 +192,7 @@ def train_grpo_overcooked(
         max_completion_length: Maximum completion length
         vllm_gpu_memory_utilization: vLLM GPU memory utilization
         rng_key: Random key for environment
+        use_mlflow: Whether to log metrics to MLflow. If True, assumes MLflow is already initialized.
     """
     if rng_key is None:
         rng_key = jax.random.PRNGKey(42)
@@ -329,6 +332,35 @@ def train_grpo_overcooked(
     logger.info(f"Episodes per iteration: {num_episodes_per_iteration}")
     logger.info(f"Max steps per episode: {max_steps}")
     logger.info(f"Output directory: {output_dir}")
+    logger.info(f"Artifacts (trajectories, datasets) will be saved to: {output_dir}/artifacts/")
+    
+    # Initialize MLflow if requested
+    if use_mlflow:
+        try:
+            import mlflow
+            logger.info("MLflow logging enabled")
+            # Log hyperparameters at the start
+            mlflow.log_params({
+                "model_name": model_name,
+                "env_name": env_name,
+                "layout": env_kwargs.get("layout", "unknown") if env_kwargs else "unknown",
+                "num_episodes_per_iteration": num_episodes_per_iteration,
+                "max_steps": max_steps,
+                "num_iterations": num_iterations,
+                "learning_rate": learning_rate,
+                "per_device_train_batch_size": per_device_train_batch_size,
+                "gradient_accumulation_steps": gradient_accumulation_steps,
+                "num_generations": num_generations,
+                "max_prompt_length": max_prompt_length,
+                "max_completion_length": max_completion_length,
+                "use_vllm": use_vllm,
+                "vllm_gpu_memory_utilization": vllm_gpu_memory_utilization,
+            })
+        except ImportError:
+            logger.warning("MLflow requested but not installed. Continuing without MLflow logging.")
+            use_mlflow = False
+    else:
+        mlflow = None
     
     for iteration in range(num_iterations):
         logger.info("")
@@ -340,7 +372,7 @@ def train_grpo_overcooked(
         logger.info(f"Generating {num_episodes_per_iteration} episodes...")
         rng_key, data_key = jax.random.split(rng_key)
         
-        dataset = generate_grpo_dataset(
+        dataset, trajectories = generate_grpo_dataset(
             env=env,
             llm_generate_fn=llm_generate_fn,
             num_episodes=num_episodes_per_iteration,
@@ -350,15 +382,44 @@ def train_grpo_overcooked(
             save_artifacts=True,
             output_dir=output_dir,
             iteration=iteration,
+            use_mlflow=use_mlflow,
         )
         
         # Calculate statistics
         avg_reward = sum(dataset['reward']) / len(dataset) if len(dataset) > 0 else 0.0
         max_reward = max(dataset['reward']) if len(dataset) > 0 else 0.0
         min_reward = min(dataset['reward']) if len(dataset) > 0 else 0.0
+        std_reward = (sum((r - avg_reward) ** 2 for r in dataset['reward']) / len(dataset)) ** 0.5 if len(dataset) > 0 else 0.0
+        
+        # Calculate episode statistics from trajectories
+        avg_episode_length = sum(t.episode_length for t in trajectories) / len(trajectories) if trajectories else 0.0
+        avg_episode_reward = sum(t.episode_reward for t in trajectories) / len(trajectories) if trajectories else 0.0
+        total_deliveries = sum(t.num_deliveries for t in trajectories) if trajectories else 0
+        avg_deliveries = total_deliveries / len(trajectories) if trajectories else 0.0
         
         logger.success(f"Dataset generated: {len(dataset)} examples")
-        logger.info(f"Reward statistics - Avg: {avg_reward:.2f}, Max: {max_reward:.2f}, Min: {min_reward:.2f}")
+        logger.info(f"Reward statistics - Avg: {avg_reward:.2f}, Max: {max_reward:.2f}, Min: {min_reward:.2f}, Std: {std_reward:.2f}")
+        logger.info(f"Episode statistics - Avg length: {avg_episode_length:.1f}, Avg reward: {avg_episode_reward:.2f}, Total deliveries: {total_deliveries}, Avg deliveries: {avg_deliveries:.2f}")
+        
+        # Log metrics to MLflow
+        if use_mlflow:
+            try:
+                mlflow.log_metrics({
+                    "iteration": iteration + 1,
+                    "dataset_size": len(dataset),
+                    "reward/avg": avg_reward,
+                    "reward/max": max_reward,
+                    "reward/min": min_reward,
+                    "reward/std": std_reward,
+                    "episode/length_avg": avg_episode_length,
+                    "episode/reward_avg": avg_episode_reward,
+                    "episode/deliveries_total": total_deliveries,
+                    "episode/deliveries_avg": avg_deliveries,
+                }, step=iteration + 1)
+                
+                logger.debug(f"Metrics logged to MLflow for iteration {iteration + 1}")
+            except Exception as e:
+                logger.warning(f"Failed to log metrics to MLflow: {e}")
         
         # Update trainer dataset
         trainer.train_dataset = dataset
@@ -405,6 +466,8 @@ if __name__ == "__main__":
                        help="Output directory")
     parser.add_argument("--use_vllm", action="store_true",
                        help="Use vLLM for inference")
+    parser.add_argument("--use_mlflow", action="store_true",
+                       help="Log metrics to MLflow (assumes MLflow is already initialized)")
     
     args = parser.parse_args()
     
@@ -416,5 +479,6 @@ if __name__ == "__main__":
         num_iterations=args.num_iterations,
         output_dir=args.output_dir,
         use_vllm=args.use_vllm,
+        use_mlflow=args.use_mlflow,
     )
 
