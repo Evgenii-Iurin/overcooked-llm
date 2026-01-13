@@ -1,0 +1,68 @@
+# GRPO Training Configuration for Overcooked
+
+# Model Configuration
+model:
+  name: "Qwen/Qwen2.5-0.5B-Instruct"
+  use_vllm: true
+  vllm_gpu_memory_utilization: 0.3
+
+# Environment Configuration
+environment:
+  name: "overcooked_v2"
+  layout: "cramped_room"  # Options: cramped_room, asymm_advantages, coord_ring, etc.
+  max_steps: 400
+  agent_view_size: null  # null for full observability, or integer for partial
+  random_agent_positions: false
+  negative_rewards: false
+  sample_recipe_on_delivery: false
+
+# Training Configuration
+training:
+  num_iterations: 100
+  num_episodes_per_iteration: 10
+  learning_rate: 5.0e-6
+  adam_beta1: 0.9
+  adam_beta2: 0.99
+  weight_decay: 0.1
+  warmup_ratio: 0.1
+  lr_scheduler_type: "cosine"
+  max_grad_norm: 0.1
+  
+  # Batch Configuration
+  per_device_train_batch_size: 2
+  gradient_accumulation_steps: 4
+  num_generations: 2
+  
+  # Sequence Lengths
+  max_prompt_length: 512  # Longer for observations + conversation history
+  max_completion_length: 256  # For plans and communication
+  
+  # Training Duration
+  num_train_epochs: 1  # Per iteration
+  
+  # Logging
+  logging_steps: 1
+  save_steps: 100
+  report_to: "tensorboard"
+
+# Reward Configuration
+rewards:
+  # Reward weights
+  env_weight: 1.0
+  coord_weight: 0.3
+  plan_weight: 0.2
+  format_weight: 0.1
+  
+  # Reward strategy: "episode_shared" or "step_individual"
+  reward_strategy: "episode_shared"
+
+# Output Configuration
+output:
+  dir: "outputs/overcooked_grpo"
+  save_total_limit: 3
+
+# Evaluation Configuration
+evaluation:
+  num_eval_episodes: 5
+  eval_frequency: 10  # Evaluate every N iterations
+
