@@ -26,6 +26,7 @@ datasets = "^4.4.2"
 torch = "^2.3.0"
 transformers = "^4.57.3"
 trl = "^0.26.2"
+mlflow = "^3.8.1"
 
 
 [tool.ruff]

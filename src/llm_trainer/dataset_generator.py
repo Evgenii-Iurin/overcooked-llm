@@ -2,7 +2,7 @@
 
 import jax
 import jax.numpy as jnp
-from typing import List, Dict, Callable, Optional
+from typing import List, Dict, Callable, Optional, Tuple
 from datasets import Dataset
 from jaxmarl.environments.overcooked_v2.overcooked import OvercookedV2
 from loguru import logger
@@ -21,6 +21,8 @@ def generate_trajectories(
     num_episodes: int,
     max_steps: int = 400,
     rng_key: Optional[jax.random.PRNGKey] = None,
+    use_mlflow: bool = False,
+    iteration: Optional[int] = None,
 ) -> List[Trajectory]:
     """Generate trajectories from environment using LLM.
     
@@ -30,6 +32,8 @@ def generate_trajectories(
         num_episodes: Number of episodes to generate
         max_steps: Maximum steps per episode
         rng_key: Random key for environment
+        use_mlflow: Whether to log metrics to MLflow during generation
+        iteration: Current iteration number (for MLflow step tracking)
         
     Returns:
         List of trajectories
@@ -40,6 +44,17 @@ def generate_trajectories(
     logger.info(f"Starting trajectory generation: {num_episodes} episodes, max {max_steps} steps each")
     wrapper = OvercookedLLMWrapper(env, llm_generate_fn)
     trajectories = []
+    
+    # Initialize MLflow if needed
+    if use_mlflow:
+        try:
+            import mlflow
+        except ImportError:
+            logger.warning("MLflow requested but not installed. Continuing without MLflow logging.")
+            use_mlflow = False
+            mlflow = None
+    else:
+        mlflow = None
     
     for episode in range(num_episodes):
         logger.info(f"Episode {episode + 1}/{num_episodes}: Starting...")
@@ -55,6 +70,35 @@ def generate_trajectories(
             f"reward={trajectory.episode_reward:.2f}, "
             f"deliveries={trajectory.num_deliveries}"
         )
+        
+        # Log metrics to MLflow in real-time
+        if use_mlflow and mlflow is not None:
+            try:
+                # Calculate running averages
+                avg_length = sum(t.episode_length for t in trajectories) / len(trajectories)
+                avg_reward = sum(t.episode_reward for t in trajectories) / len(trajectories)
+                total_deliveries = sum(t.num_deliveries for t in trajectories)
+                avg_deliveries = total_deliveries / len(trajectories)
+                
+                # Calculate step number: (iteration * num_episodes) + episode
+                # This allows tracking progress across iterations
+                step = (iteration * num_episodes + episode + 1) if iteration is not None else (episode + 1)
+                
+                mlflow.log_metrics({
+                    f"episode_generation/{episode + 1}/length": trajectory.episode_length,
+                    f"episode_generation/{episode + 1}/reward": trajectory.episode_reward,
+                    f"episode_generation/{episode + 1}/deliveries": trajectory.num_deliveries,
+                    # Running averages
+                    f"episode_generation/running_avg_length": avg_length,
+                    f"episode_generation/running_avg_reward": avg_reward,
+                    f"episode_generation/running_total_deliveries": total_deliveries,
+                    f"episode_generation/running_avg_deliveries": avg_deliveries,
+                    f"episode_generation/episodes_completed": len(trajectories),
+                }, step=step)
+                
+                logger.debug(f"Episode {episode + 1} metrics logged to MLflow")
+            except Exception as e:
+                logger.warning(f"Failed to log episode metrics to MLflow: {e}")
     
     logger.info(f"Trajectory generation complete: {len(trajectories)} episodes collected")
     return trajectories
@@ -140,7 +184,8 @@ def generate_grpo_dataset(
     save_artifacts: bool = True,
     output_dir: Optional[str] = None,
     iteration: Optional[int] = None,
-) -> Dataset:
+    use_mlflow: bool = False,
+) -> Tuple[Dataset, List[Trajectory]]:
     """Generate GRPO dataset from environment rollouts.
     
     Args:
@@ -151,11 +196,12 @@ def generate_grpo_dataset(
         reward_strategy: Reward assignment strategy
         rng_key: Random key for environment
         save_artifacts: Whether to save trajectories and dataset to disk
-        output_dir: Output directory for artifacts (required if save_artifacts=True)
+        output_dir: Output directory for artifacts. All artifacts will be saved to {output_dir}/artifacts/
         iteration: Optional iteration number for artifact naming
+        use_mlflow: Whether to log metrics to MLflow during generation
         
     Returns:
-        GRPO-compatible dataset
+        Tuple of (GRPO-compatible dataset, list of trajectories)
     """
     # Generate trajectories
     trajectories = generate_trajectories(
@@ -164,6 +210,8 @@ def generate_grpo_dataset(
         num_episodes=num_episodes,
         max_steps=max_steps,
         rng_key=rng_key,
+        use_mlflow=use_mlflow,
+        iteration=iteration,
     )
     
     # Save trajectories if requested
@@ -183,7 +231,7 @@ def generate_grpo_dataset(
         from .artifacts import save_dataset
         save_dataset(dataset, output_dir, iteration=iteration)
     
-    return dataset
+    return dataset, trajectories
 
 
 def filter_dataset_by_reward(

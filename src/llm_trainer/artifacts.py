@@ -21,19 +21,17 @@ def save_trajectories(
     
     Args:
         trajectories: List of trajectories to save
-        output_dir: Output directory path
+        output_dir: Output directory path. Trajectories will be saved to {output_dir}/artifacts/trajectories/
         prefix: File prefix (default: "trajectories")
         iteration: Optional iteration number to include in filename
         
     Returns:
         Path to saved file
     """
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
-    
-    # Create artifacts subdirectory
-    artifacts_dir = output_path / "artifacts" / "trajectories"
-    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    # Create artifacts subdirectory structure
+    artifacts_base = Path(output_dir) / "artifacts"
+    trajectories_dir = artifacts_base / "trajectories"
+    trajectories_dir.mkdir(parents=True, exist_ok=True)
     
     # Generate filename
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -42,14 +40,15 @@ def save_trajectories(
     else:
         filename = f"{prefix}_{timestamp}.pkl"
     
-    filepath = artifacts_dir / filename
+    filepath = trajectories_dir / filename
     
     # Save trajectories
     logger.info(f"Saving {len(trajectories)} trajectories to {filepath}")
+    logger.info(f"Full path: {filepath.absolute()}")
     with open(filepath, 'wb') as f:
         pickle.dump(trajectories, f)
     
-    logger.success(f"Trajectories saved to {filepath}")
+    logger.success(f"Trajectories saved to {filepath.absolute()}")
     
     # Also save metadata as JSON
     metadata = {
@@ -62,7 +61,7 @@ def save_trajectories(
         "total_deliveries": sum(t.num_deliveries for t in trajectories),
     }
     
-    metadata_path = artifacts_dir / f"{prefix}_iter{iteration:04d}_{timestamp}_metadata.json" if iteration else artifacts_dir / f"{prefix}_{timestamp}_metadata.json"
+    metadata_path = trajectories_dir / (f"{prefix}_iter{iteration:04d}_{timestamp}_metadata.json" if iteration else f"{prefix}_{timestamp}_metadata.json")
     with open(metadata_path, 'w') as f:
         json.dump(metadata, f, indent=2)
     
@@ -96,19 +95,17 @@ def save_dataset(
     
     Args:
         dataset: Dataset to save
-        output_dir: Output directory path
+        output_dir: Output directory path. Datasets will be saved to {output_dir}/artifacts/datasets/
         prefix: File prefix (default: "dataset")
         iteration: Optional iteration number to include in filename
         
     Returns:
         Path to saved dataset directory
     """
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
-    
-    # Create artifacts subdirectory
-    artifacts_dir = output_path / "artifacts" / "datasets"
-    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    # Create artifacts subdirectory structure
+    artifacts_base = Path(output_dir) / "artifacts"
+    datasets_dir = artifacts_base / "datasets"
+    datasets_dir.mkdir(parents=True, exist_ok=True)
     
     # Generate directory name
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -117,13 +114,14 @@ def save_dataset(
     else:
         dirname = f"{prefix}_{timestamp}"
     
-    dataset_dir = artifacts_dir / dirname
+    dataset_dir = datasets_dir / dirname
     
     # Save dataset
     logger.info(f"Saving dataset with {len(dataset)} examples to {dataset_dir}")
+    logger.info(f"Full path: {dataset_dir.absolute()}")
     dataset.save_to_disk(str(dataset_dir))
     
-    logger.success(f"Dataset saved to {dataset_dir}")
+    logger.success(f"Dataset saved to {dataset_dir.absolute()}")
     
     # Also save metadata
     metadata = {

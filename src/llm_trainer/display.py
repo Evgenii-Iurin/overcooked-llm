@@ -5,6 +5,8 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich.console import Group
+from rich.text import Text
+from rich.markup import escape
 
 from .communication import LLMResponse, ActionPlan, get_plan_warnings
 
@@ -45,25 +47,25 @@ def display_agent_context(
     title = f"Agent {agent_id} - Step {step}"
     content_parts = []
     
-    # Observation
+    # Observation - escape markup to prevent parsing errors
     content_parts.append(Panel(
-        obs_text,
+        escape(obs_text),
         title="[bold cyan]Observation[/bold cyan]",
         border_style="cyan"
     ))
     
-    # Previous validation errors
+    # Previous validation errors - escape markup
     if previous_validation_errors:
-        error_text = "\n".join([f"⚠️ {err}" for err in previous_validation_errors])
+        error_text = "\n".join([f"⚠️ {escape(err)}" for err in previous_validation_errors])
         content_parts.append(Panel(
             error_text,
             title="[bold yellow]Previous Validation Errors[/bold yellow]",
             border_style="yellow"
         ))
     
-    # Prompt
+    # Prompt - escape content to prevent markup parsing
     prompt_text = "\n\n".join([
-        f"[bold]{msg['role']}[/bold]:\n{msg['content']}"
+        f"[bold]{msg['role']}[/bold]:\n{escape(msg['content'])}"
         for msg in prompt
     ])
     content_parts.append(Panel(
@@ -72,9 +74,9 @@ def display_agent_context(
         border_style="blue"
     ))
     
-    # Raw LLM Response
+    # Raw LLM Response - escape markup to prevent parsing errors
     content_parts.append(Panel(
-        raw_response,
+        escape(raw_response),
         title="[bold green]Raw LLM Response[/bold green]",
         border_style="green"
     ))
@@ -83,26 +85,26 @@ def display_agent_context(
     parsed_info = []
     parse_errors = []
     
-    # Check communication parsing
+    # Check communication parsing - escape user content
     if parsed_response.communication:
         parsed_info.append(f"[bold green]✓ Communication parsed[/bold green]")
-        parsed_info.append(f"  Message: {parsed_response.communication.message}")
-        parsed_info.append(f"  To: {parsed_response.communication.to_agent}")
+        parsed_info.append(f"  Message: {escape(str(parsed_response.communication.message))}")
+        parsed_info.append(f"  To: {escape(str(parsed_response.communication.to_agent))}")
     else:
         parse_errors.append("[yellow]⚠️ No communication parsed from response[/yellow]")
     
-    # Check plan parsing
+    # Check plan parsing - escape user content
     if parsed_response.plan:
         parsed_info.append(f"[bold green]✓ Plan parsed[/bold green]")
-        parsed_info.append(f"  Action: {parsed_response.plan.action}")
+        parsed_info.append(f"  Action: {escape(str(parsed_response.plan.action))}")
         if parsed_response.plan.description:
-            parsed_info.append(f"  Description: {parsed_response.plan.description}")
+            parsed_info.append(f"  Description: {escape(str(parsed_response.plan.description))}")
         if parsed_response.plan.ingredients:
-            parsed_info.append(f"  Ingredients: {parsed_response.plan.ingredients}")
+            parsed_info.append(f"  Ingredients: {escape(str(parsed_response.plan.ingredients))}")
         else:
             parsed_info.append(f"  [yellow]⚠️ No ingredients specified[/yellow]")
         if parsed_response.plan.target_location:
-            parsed_info.append(f"  Target Location: {parsed_response.plan.target_location}")
+            parsed_info.append(f"  Target Location: {escape(str(parsed_response.plan.target_location))}")
         else:
             parsed_info.append(f"  [yellow]⚠️ No target location specified[/yellow]")
     else:
@@ -122,16 +124,17 @@ def display_agent_context(
         border_style="magenta"
     ))
     
-    # Validation
+    # Validation - escape error messages
     is_valid, error_msg = validation_result
     if is_valid:
         validation_text = "[bold green]✓ Plan is valid[/bold green]"
     else:
-        validation_text = f"[bold red]✗ Plan validation failed:[/bold red]\n{error_msg}"
+        validation_text = f"[bold red]✗ Plan validation failed:[/bold red]\n{escape(str(error_msg))}"
     
     warnings = get_plan_warnings(plan, env) if plan else []
     if warnings:
-        validation_text += f"\n[yellow]Warnings:[/yellow] {', '.join(warnings)}"
+        escaped_warnings = [escape(str(w)) for w in warnings]
+        validation_text += f"\n[yellow]Warnings:[/yellow] {', '.join(escaped_warnings)}"
     
     content_parts.append(Panel(
         validation_text,
@@ -144,7 +147,7 @@ def display_agent_context(
     action_names = {0: "right", 1: "down", 2: "left", 3: "up", 4: "stay", 5: "interact"}
     
     if executor_info.get("error"):
-        executor_text.append(f"[bold red]✗ Executor Error:[/bold red] {executor_info['error']}")
+        executor_text.append(f"[bold red]✗ Executor Error:[/bold red] {escape(str(executor_info['error']))}")
     elif executor_info.get("using_buffer"):
         executor_text.append(f"[bold]Using action buffer[/bold]")
         executor_text.append(f"  Buffer length: {executor_info.get('buffer_length', 0)}")
@@ -163,7 +166,7 @@ def display_agent_context(
             executor_text.append(f"  [dim]Executor returned empty sequence[/dim]")
         
         if executor_info.get("plan_action"):
-            executor_text.append(f"  Plan: {executor_info['plan_action']}")
+            executor_text.append(f"  Plan: {escape(str(executor_info['plan_action']))}")
         if executor_info.get("target_found") is not None:
             target_status = "✓ Found" if executor_info['target_found'] else "✗ Not found"
             executor_text.append(f"  Target: {target_status}")
