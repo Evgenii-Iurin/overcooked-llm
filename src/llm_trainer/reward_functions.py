@@ -92,18 +92,18 @@ def plan_executability_reward_func(
     reward = 0.0
     
     for step in trajectory.steps:
-        # Check if plans are parseable
-        if step.llm_response_agent0.plan:
-            reward += 1.0
-        else:
-            reward -= 0.5
+        # Check if plans are parseable (only reward if also valid)
+        if step.llm_response_agent0.plan and step.plan_valid_agent0:
+            reward += 1.0  # Parsing reward (only for valid plans)
+        elif not step.llm_response_agent0.plan:
+            reward -= 0.5  # Penalty for no plan
         
-        if step.llm_response_agent1.plan:
-            reward += 1.0
-        else:
-            reward -= 0.5
+        if step.llm_response_agent1.plan and step.plan_valid_agent1:
+            reward += 1.0  # Parsing reward (only for valid plans)
+        elif not step.llm_response_agent1.plan:
+            reward -= 0.5  # Penalty for no plan
         
-        # Check if plans passed validation (higher reward than just parsing)
+        # Check if plans passed validation (additional reward on top of parsing)
         if step.plan_valid_agent0:
             reward += 1.5  # Validation passed
         if step.plan_valid_agent1:
@@ -263,10 +263,11 @@ def compute_step_rewards(
     rewards["agent_1"] += format_rewards[1] * 0.1
     
     # Plan parsing (individual) - small reward for parsing
-    if step.llm_response_agent0.plan:
+    # Only give parsing reward if plan is also valid (to avoid rewarding invalid plans)
+    if step.llm_response_agent0.plan and step.plan_valid_agent0:
         rewards["agent_0"] += 0.1
     
-    if step.llm_response_agent1.plan:
+    if step.llm_response_agent1.plan and step.plan_valid_agent1:
         rewards["agent_1"] += 0.1
     
     # Plan validation (individual) - medium reward for validation

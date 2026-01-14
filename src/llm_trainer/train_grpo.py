@@ -171,6 +171,8 @@ def train_grpo_overcooked(
     vllm_gpu_memory_utilization: float = 0.3,
     rng_key: Optional[jax.random.PRNGKey] = None,
     use_mlflow: bool = False,
+    save_checkpoint_every_n_episodes: Optional[int] = None,
+    verbose: bool = False,
 ):
     """Train LLM using GRPO on Overcooked environment.
     
@@ -182,6 +184,9 @@ def train_grpo_overcooked(
         max_steps: Maximum steps per episode
         num_iterations: Number of training iterations
         output_dir: Output directory for checkpoints, models, and all artifacts.
+        save_checkpoint_every_n_episodes: Optional. If set, save trajectory checkpoint every N episodes
+            during generation (e.g., 5 means save after episodes 5, 10, 15, ...). 
+            Useful for long-running generation to prevent data loss on crashes.
                    Artifacts (trajectories, datasets) will be saved to {output_dir}/artifacts/
         use_vllm: Whether to use vLLM for inference
         learning_rate: Learning rate
@@ -193,6 +198,11 @@ def train_grpo_overcooked(
         vllm_gpu_memory_utilization: vLLM GPU memory utilization
         rng_key: Random key for environment
         use_mlflow: Whether to log metrics to MLflow. If True, assumes MLflow is already initialized.
+        save_checkpoint_every_n_episodes: Optional. If set, save trajectory checkpoint every N episodes
+            during generation (e.g., 5 means save after episodes 5, 10, 15, ...). 
+            Useful for long-running generation to prevent data loss on crashes.
+        verbose: Whether to display rich output during generation (default: False for faster generation).
+            Set to True only for debugging - significantly slows down execution.
     """
     if rng_key is None:
         rng_key = jax.random.PRNGKey(42)
@@ -383,6 +393,8 @@ def train_grpo_overcooked(
             output_dir=output_dir,
             iteration=iteration,
             use_mlflow=use_mlflow,
+            save_checkpoint_every_n_episodes=save_checkpoint_every_n_episodes,
+            verbose=verbose,
         )
         
         # Calculate statistics
@@ -468,6 +480,10 @@ if __name__ == "__main__":
                        help="Use vLLM for inference")
     parser.add_argument("--use_mlflow", action="store_true",
                        help="Log metrics to MLflow (assumes MLflow is already initialized)")
+    parser.add_argument("--save_checkpoint_every_n_episodes", type=int, default=None,
+                       help="Save trajectory checkpoint every N episodes during generation (e.g., 5). Useful for long-running generation.")
+    parser.add_argument("--verbose", action="store_true",
+                       help="Enable rich display output (slows down execution significantly - use only for debugging)")
     
     args = parser.parse_args()
     
@@ -480,5 +496,7 @@ if __name__ == "__main__":
         output_dir=args.output_dir,
         use_vllm=args.use_vllm,
         use_mlflow=args.use_mlflow,
+        save_checkpoint_every_n_episodes=args.save_checkpoint_every_n_episodes,
+        verbose=args.verbose,
     )
 
