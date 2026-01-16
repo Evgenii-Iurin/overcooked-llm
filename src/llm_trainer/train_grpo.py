@@ -240,14 +240,30 @@ def train_grpo_overcooked(
         try:
             logger.info("Initializing vLLM engine...")
             from vllm import LLM, SamplingParams
+            # Reduce GPU memory utilization to leave room for training model
+            # If vllm_gpu_memory_utilization is too high, training model won't fit
+            # With 16GB GPU, we need to be conservative: vLLM ~30-40%, Training ~40-50%, buffers ~10-20%
+            effective_vllm_util = min(vllm_gpu_memory_utilization, 0.35)  # Cap at 35% for vLLM
+            if effective_vllm_util < vllm_gpu_memory_utilization:
+                logger.warning(f"vLLM GPU memory utilization capped at {effective_vllm_util} (from {vllm_gpu_memory_utilization}) to leave room for training model")
+            else:
+                logger.info(f"vLLM GPU memory utilization: {effective_vllm_util}")
             vllm_engine = LLM(
                 model=model_name,
-                gpu_memory_utilization=vllm_gpu_memory_utilization,
+                gpu_memory_utilization=effective_vllm_util,
             )
             logger.success("vLLM engine initialized successfully")
         except ImportError:
             logger.warning("vLLM not available, falling back to transformers")
             use_vllm = False
+        except RuntimeError as e:
+            if "out of memory" in str(e).lower() or "CUDA" in str(e):
+                logger.error(f"vLLM initialization failed due to memory: {e}")
+                logger.warning("Falling back to transformers pipeline (will be slower but uses less memory)")
+                use_vllm = False
+                vllm_engine = None
+            else:
+                raise
     
     # Create LLM generation function
     llm_generate_fn = create_llm_generate_fn(model_name, tokenizer, vllm_engine)
@@ -288,21 +304,28 @@ def train_grpo_overcooked(
         import os
         os.environ["ACCELERATE_USE_CPU"] = "false"
         os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-        # Try to load model on GPU explicitly before passing to trainer
-        from transformers import AutoModelForCausalLM
-        logger.info("Loading model on GPU...")
-        # Force GPU placement - use explicit device_map instead of "auto"
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            device_map="cuda:0",  # Explicitly place on GPU 0
-            dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
-            low_cpu_mem_usage=True,
-        )
-        logger.info(f"Model loaded. Device map: {model.hf_device_map if hasattr(model, 'hf_device_map') else 'N/A'}")
-        # Verify first parameter is on GPU
-        first_param = next(model.parameters(), None)
-        if first_param is not None:
-            logger.info(f"Model parameters on device: {first_param.device}")
+        
+        # If using vLLM, don't pre-load model on GPU to avoid memory duplication
+        # vLLM already has the model loaded, and GRPOTrainer will load it separately
+        if use_vllm:
+            logger.info("Using vLLM for inference - letting GRPOTrainer handle model loading to avoid memory duplication")
+            model = model_name  # Pass string, let trainer load it (will share GPU with vLLM)
+        else:
+            # Try to load model on GPU explicitly before passing to trainer
+            from transformers import AutoModelForCausalLM
+            logger.info("Loading model on GPU...")
+            # Force GPU placement - use explicit device_map instead of "auto"
+            model = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                device_map="cuda:0",  # Explicitly place on GPU 0
+                dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
+                low_cpu_mem_usage=True,
+            )
+            logger.info(f"Model loaded. Device map: {model.hf_device_map if hasattr(model, 'hf_device_map') else 'N/A'}")
+            # Verify first parameter is on GPU
+            first_param = next(model.parameters(), None)
+            if first_param is not None:
+                logger.info(f"Model parameters on device: {first_param.device}")
     else:
         logger.warning("CUDA not available, using CPU (training will be slow)")
         model = model_name  # Pass string, let trainer load it
