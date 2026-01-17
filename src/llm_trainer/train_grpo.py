@@ -97,17 +97,15 @@ def print_environment_grid(env, state):
                 "L=Button indicator, A/a=Agents, ' '=Empty")
 
 
-def create_llm_generate_fn(model, tokenizer, batch_size: int = 1):
+def create_llm_generate_fn(model, tokenizer):
     """Create LLM generation function compatible with wrapper.
     
     Args:
         model: HuggingFace model object (must be loaded, not a string)
         tokenizer: Tokenizer instance
-        batch_size: Batch size for inference. If > 1, function will batch multiple prompts.
-                    Note: The function still accepts single prompts, but will batch them internally.
         
     Returns:
-        Function that takes prompt (or list of prompts) and returns completion string (or list)
+        Function that takes prompt and returns completion string
     """
     # Use transformers pipeline for inference
     from transformers import pipeline
@@ -117,51 +115,22 @@ def create_llm_generate_fn(model, tokenizer, batch_size: int = 1):
         model=model,
         tokenizer=tokenizer,
         device_map="auto",
-        batch_size=batch_size if batch_size > 1 else None,  # Enable batching if batch_size > 1
     )
     
     def generate_fn(prompt):
-        """Generate completion(s) for prompt(s).
-        
-        Args:
-            prompt: Single prompt (list of message dicts) or list of prompts
-            
-        Returns:
-            Single completion string or list of completion strings
-        """
-        # Handle single prompt or list of prompts
-        is_single = isinstance(prompt, list) and len(prompt) > 0 and isinstance(prompt[0], dict)
-        if is_single:
-            prompts = [prompt]
-        else:
-            prompts = prompt
-        
-        # Convert all prompts to text format
-        prompt_texts = []
-        for p in prompts:
-            prompt_text = tokenizer.apply_chat_template(
-                p,
-                tokenize=False,
-                add_generation_prompt=True
-            )
-            prompt_texts.append(prompt_text)
-        
-        # Batch process all prompts
+        messages = prompt
+        prompt_text = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True
+        )
         outputs = pipe(
-            prompt_texts,
+            prompt_text,
             max_new_tokens=256,
             temperature=0.7,
             do_sample=True,
         )
-        
-        # Extract generated text (remove prompt from output)
-        results = []
-        for i, output in enumerate(outputs):
-            generated_text = output["generated_text"][len(prompt_texts[i]):].strip()
-            results.append(generated_text)
-        
-        # Return single result if single prompt, list if multiple
-        return results[0] if is_single else results
+        return outputs[0]["generated_text"][len(prompt_text):].strip()
     
     return generate_fn
 
@@ -180,7 +149,6 @@ def train_grpo_overcooked(
     num_generations: int = 2,
     max_prompt_length: int = 512,
     max_completion_length: int = 256,
-    inference_batch_size: int = 1,
     rng_key: Optional[jax.random.PRNGKey] = None,
     use_mlflow: bool = False,
     save_checkpoint_every_n_episodes: Optional[int] = None,
@@ -202,10 +170,6 @@ def train_grpo_overcooked(
         num_generations: Number of generations per prompt
         max_prompt_length: Maximum prompt length
         max_completion_length: Maximum completion length
-        inference_batch_size: Batch size for inference during dataset generation (default: 1).
-            Note: Agent 0 and Agent 1 cannot be batched together in the same step due to
-            conversation dependency. Batching is useful when accumulating prompts across steps.
-            Set to 1 for sequential processing, or > 1 if you implement step-level batching.
         rng_key: Random key for environment
         use_mlflow: Whether to log metrics to MLflow. If True, assumes MLflow is already initialized.
         save_checkpoint_every_n_episodes: Optional. If set, save trajectory checkpoint every N episodes
@@ -305,8 +269,8 @@ def train_grpo_overcooked(
         logger.info("Model loaded on CPU")
     
     # Create LLM generation function using the loaded model
-    logger.info(f"Creating inference function (batch_size={inference_batch_size})...")
-    llm_generate_fn = create_llm_generate_fn(model, tokenizer, batch_size=inference_batch_size)
+    logger.info("Creating inference function...")
+    llm_generate_fn = create_llm_generate_fn(model, tokenizer)
     
     # Initialize trainer with the same model instance
     logger.info("Initializing GRPOTrainer...")
@@ -444,7 +408,7 @@ def train_grpo_overcooked(
         # Update LLM generation function with updated model from trainer
         # The trainer's model is the same instance, but weights have been updated
         logger.debug("Updating LLM generation function with trained model")
-        llm_generate_fn = create_llm_generate_fn(trainer.model, tokenizer, batch_size=inference_batch_size)
+        llm_generate_fn = create_llm_generate_fn(trainer.model, tokenizer)
         
         logger.success(f"Iteration {iteration + 1}/{num_iterations} complete")
     
@@ -475,10 +439,6 @@ if __name__ == "__main__":
                        help="Log metrics to MLflow (assumes MLflow is already initialized)")
     parser.add_argument("--save_checkpoint_every_n_episodes", type=int, default=None,
                        help="Save trajectory checkpoint every N episodes during generation (e.g., 5). Useful for long-running generation.")
-    parser.add_argument("--inference_batch_size", type=int, default=1,
-                       help="Batch size for inference during dataset generation (default: 1). "
-                            "Note: Agent 0 and Agent 1 cannot be batched together due to conversation dependency. "
-                            "Batching is useful when accumulating prompts across steps.")
     parser.add_argument("--verbose", action="store_true",
                        help="Enable rich display output (slows down execution significantly - use only for debugging)")
     
@@ -491,7 +451,6 @@ if __name__ == "__main__":
         num_episodes_per_iteration=args.num_episodes,
         num_iterations=args.num_iterations,
         output_dir=args.output_dir,
-        inference_batch_size=args.inference_batch_size,
         use_mlflow=args.use_mlflow,
         save_checkpoint_every_n_episodes=args.save_checkpoint_every_n_episodes,
         verbose=args.verbose,
