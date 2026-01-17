@@ -110,6 +110,17 @@ def create_llm_generate_fn(model, tokenizer):
     # Use transformers pipeline for inference
     from transformers import pipeline
     
+    # Disable gradient checkpointing for inference to avoid warnings
+    # The model may have gradient checkpointing enabled from training (via GRPOTrainer),
+    # but it's not needed during inference and causes "Gradients will be None" warnings
+    # when called with torch.no_grad() or without requires_grad=True inputs.
+    # Note: GRPOTrainer will re-enable it automatically when training starts.
+    if hasattr(model, 'gradient_checkpointing_disable'):
+        model.gradient_checkpointing_disable()
+    
+    # Set model to eval mode for inference
+    model.eval()
+    
     pipe = pipeline(
         "text-generation",
         model=model,
@@ -118,6 +129,12 @@ def create_llm_generate_fn(model, tokenizer):
     )
     
     def generate_fn(prompt):
+        # Ensure model is in eval mode and checkpointing is disabled during generation
+        # (in case it was re-enabled by trainer between calls)
+        model.eval()
+        if hasattr(model, 'gradient_checkpointing_disable'):
+            model.gradient_checkpointing_disable()
+        
         messages = prompt
         prompt_text = tokenizer.apply_chat_template(
             messages,
@@ -206,6 +223,8 @@ def train_grpo_overcooked(
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+    # Left-padding for decoder-only models: correct generation when batching
+    tokenizer.padding_side = "left"
     logger.info("Tokenizer loaded successfully")
     
     # Check if CUDA is available
@@ -230,6 +249,7 @@ def train_grpo_overcooked(
         max_prompt_length=max_prompt_length,
         max_completion_length=max_completion_length,
         num_train_epochs=1,
+        max_steps=1,  # Required when dataloader has no length (e.g. tiny sanity-check datasets). Upper bound; training stops when epoch ends or this is reached.
         save_steps=100,
         max_grad_norm=0.1,
         report_to="tensorboard",
@@ -431,6 +451,8 @@ if __name__ == "__main__":
                        help="Layout name")
     parser.add_argument("--num_episodes", type=int, default=10,
                        help="Episodes per iteration")
+    parser.add_argument("--max_steps", type=int, default=400,
+                       help="Maximum steps per episode. Use 1 for a quick training sanity check.")
     parser.add_argument("--num_iterations", type=int, default=100,
                        help="Number of training iterations")
     parser.add_argument("--output_dir", type=str, default="outputs/overcooked_grpo",
@@ -447,8 +469,9 @@ if __name__ == "__main__":
     train_grpo_overcooked(
         model_name=args.model,
         env_name=args.env,
-        env_kwargs={"layout": args.layout, "max_steps": 400},
+        env_kwargs={"layout": args.layout, "max_steps": args.max_steps},
         num_episodes_per_iteration=args.num_episodes,
+        max_steps=args.max_steps,
         num_iterations=args.num_iterations,
         output_dir=args.output_dir,
         use_mlflow=args.use_mlflow,

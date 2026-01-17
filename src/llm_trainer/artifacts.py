@@ -50,20 +50,32 @@ def save_trajectories(
     
     logger.success(f"Trajectories saved to {filepath.absolute()}")
     
-    # Also save metadata as JSON
+    # Also save metadata as JSON (convert JAX/NumPy arrays to Python scalars)
+    def _to_python_scalar(x):
+        if hasattr(x, 'item'):
+            return x.item()
+        return x
+
+    def _json_default(o):
+        if hasattr(o, 'item'):
+            return o.item()
+        raise TypeError(f'Object of type {type(o).__name__} is not JSON serializable')
+
+    _sum_reward = sum(t.episode_reward for t in trajectories)
+    _avg_reward = _sum_reward / len(trajectories) if trajectories else 0.0
     metadata = {
         "num_trajectories": len(trajectories),
         "timestamp": timestamp,
         "iteration": iteration,
         "total_steps": sum(t.episode_length for t in trajectories),
-        "total_reward": sum(t.episode_reward for t in trajectories),
-        "avg_reward": sum(t.episode_reward for t in trajectories) / len(trajectories) if trajectories else 0.0,
-        "total_deliveries": sum(t.num_deliveries for t in trajectories),
+        "total_reward": _to_python_scalar(_sum_reward),
+        "avg_reward": _to_python_scalar(_avg_reward),
+        "total_deliveries": _to_python_scalar(sum(t.num_deliveries for t in trajectories)),
     }
-    
-    metadata_path = trajectories_dir / (f"{prefix}_iter{iteration:04d}_{timestamp}_metadata.json" if iteration else f"{prefix}_{timestamp}_metadata.json")
+
+    metadata_path = trajectories_dir / (f"{prefix}_iter{iteration:04d}_{timestamp}_metadata.json" if iteration is not None else f"{prefix}_{timestamp}_metadata.json")
     with open(metadata_path, 'w') as f:
-        json.dump(metadata, f, indent=2)
+        json.dump(metadata, f, indent=2, default=_json_default)
     
     return str(filepath)
 

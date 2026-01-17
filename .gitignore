@@ -211,3 +211,5 @@ mlflow.db
 
 # vscode
 .vscode/settings.json
+
+outputs/

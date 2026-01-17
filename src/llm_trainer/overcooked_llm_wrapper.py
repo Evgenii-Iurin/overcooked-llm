@@ -282,7 +282,7 @@ class OvercookedLLMWrapper:
                 console.print(f"[bold bright_white]Step {step}[/bold bright_white]\n")
             else:
                 # Minimal output: just track step number
-                print(f"Step {step}", end="\r", flush=True)
+                print(f"Step {step}")
             
             # Process with LLM
             actions, conversation_history, llm_responses, plan_status = self.step_with_llm(
