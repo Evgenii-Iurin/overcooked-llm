@@ -97,60 +97,59 @@ def print_environment_grid(env, state):
                 "L=Button indicator, A/a=Agents, ' '=Empty")
 
 
-def create_llm_generate_fn(model, tokenizer, vllm_engine=None):
+def create_llm_generate_fn(model, tokenizer):
     """Create LLM generation function compatible with wrapper.
     
     Args:
-        model: HuggingFace model or model path
+        model: HuggingFace model object (must be loaded, not a string)
         tokenizer: Tokenizer instance
-        vllm_engine: Optional vLLM engine for faster inference
         
     Returns:
         Function that takes prompt and returns completion string
     """
-    if vllm_engine is not None:
-        def generate_fn(prompt):
-            # Use vLLM for generation
-            messages = prompt
-            # Convert to vLLM format
-            prompt_text = tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=True
-            )
-            outputs = vllm_engine.generate([prompt_text], sampling_params={
-                "temperature": 0.7,
-                "max_tokens": 256,
-            })
-            return outputs[0].outputs[0].text
-        return generate_fn
-    else:
-        # Use transformers pipeline
-        from transformers import pipeline
+    # Use transformers pipeline for inference
+    from transformers import pipeline
+    
+    # Disable gradient checkpointing for inference to avoid warnings
+    # The model may have gradient checkpointing enabled from training (via GRPOTrainer),
+    # but it's not needed during inference and causes "Gradients will be None" warnings
+    # when called with torch.no_grad() or without requires_grad=True inputs.
+    # Note: GRPOTrainer will re-enable it automatically when training starts.
+    if hasattr(model, 'gradient_checkpointing_disable'):
+        model.gradient_checkpointing_disable()
+    
+    # Set model to eval mode for inference
+    model.eval()
+    
+    pipe = pipeline(
+        "text-generation",
+        model=model,
+        tokenizer=tokenizer,
+        device_map="auto",
+    )
+    
+    def generate_fn(prompt):
+        # Ensure model is in eval mode and checkpointing is disabled during generation
+        # (in case it was re-enabled by trainer between calls)
+        model.eval()
+        if hasattr(model, 'gradient_checkpointing_disable'):
+            model.gradient_checkpointing_disable()
         
-        pipe = pipeline(
-            "text-generation",
-            model=model,
-            tokenizer=tokenizer,
-            device_map="auto",
+        messages = prompt
+        prompt_text = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True
         )
-        
-        def generate_fn(prompt):
-            messages = prompt
-            prompt_text = tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=True
-            )
-            outputs = pipe(
-                prompt_text,
-                max_new_tokens=256,
-                temperature=0.7,
-                do_sample=True,
-            )
-            return outputs[0]["generated_text"][len(prompt_text):].strip()
-        
-        return generate_fn
+        outputs = pipe(
+            prompt_text,
+            max_new_tokens=256,
+            temperature=0.7,
+            do_sample=True,
+        )
+        return outputs[0]["generated_text"][len(prompt_text):].strip()
+    
+    return generate_fn
 
 
 def train_grpo_overcooked(
@@ -161,16 +160,16 @@ def train_grpo_overcooked(
     max_steps: int = 400,
     num_iterations: int = 100,
     output_dir: str = "outputs/overcooked_grpo",
-    use_vllm: bool = True,
     learning_rate: float = 5e-6,
     per_device_train_batch_size: int = 2,
     gradient_accumulation_steps: int = 4,
     num_generations: int = 2,
     max_prompt_length: int = 512,
     max_completion_length: int = 256,
-    vllm_gpu_memory_utilization: float = 0.3,
     rng_key: Optional[jax.random.PRNGKey] = None,
     use_mlflow: bool = False,
+    save_checkpoint_every_n_episodes: Optional[int] = None,
+    verbose: bool = False,
 ):
     """Train LLM using GRPO on Overcooked environment.
     
@@ -182,17 +181,19 @@ def train_grpo_overcooked(
         max_steps: Maximum steps per episode
         num_iterations: Number of training iterations
         output_dir: Output directory for checkpoints, models, and all artifacts.
-                   Artifacts (trajectories, datasets) will be saved to {output_dir}/artifacts/
-        use_vllm: Whether to use vLLM for inference
         learning_rate: Learning rate
         per_device_train_batch_size: Batch size per device
         gradient_accumulation_steps: Gradient accumulation steps
         num_generations: Number of generations per prompt
         max_prompt_length: Maximum prompt length
         max_completion_length: Maximum completion length
-        vllm_gpu_memory_utilization: vLLM GPU memory utilization
         rng_key: Random key for environment
         use_mlflow: Whether to log metrics to MLflow. If True, assumes MLflow is already initialized.
+        save_checkpoint_every_n_episodes: Optional. If set, save trajectory checkpoint every N episodes
+            during generation (e.g., 5 means save after episodes 5, 10, 15, ...). 
+            Useful for long-running generation to prevent data loss on crashes.
+        verbose: Whether to display rich output during generation (default: False for faster generation).
+            Set to True only for debugging - significantly slows down execution.
     """
     if rng_key is None:
         rng_key = jax.random.PRNGKey(42)
@@ -222,25 +223,9 @@ def train_grpo_overcooked(
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+    # Left-padding for decoder-only models: correct generation when batching
+    tokenizer.padding_side = "left"
     logger.info("Tokenizer loaded successfully")
-    
-    # Initialize vLLM engine if requested
-    vllm_engine = None
-    if use_vllm:
-        try:
-            logger.info("Initializing vLLM engine...")
-            from vllm import LLM, SamplingParams
-            vllm_engine = LLM(
-                model=model_name,
-                gpu_memory_utilization=vllm_gpu_memory_utilization,
-            )
-            logger.success("vLLM engine initialized successfully")
-        except ImportError:
-            logger.warning("vLLM not available, falling back to transformers")
-            use_vllm = False
-    
-    # Create LLM generation function
-    llm_generate_fn = create_llm_generate_fn(model_name, tokenizer, vllm_engine)
     
     # Check if CUDA is available
     import torch
@@ -249,7 +234,6 @@ def train_grpo_overcooked(
     
     # GRPO configuration
     training_args = GRPOConfig(
-        use_vllm=use_vllm,
         learning_rate=learning_rate,
         adam_beta1=0.9,
         adam_beta2=0.99,
@@ -265,12 +249,15 @@ def train_grpo_overcooked(
         max_prompt_length=max_prompt_length,
         max_completion_length=max_completion_length,
         num_train_epochs=1,
+        max_steps=1,  # Required when dataloader has no length (e.g. tiny sanity-check datasets). Upper bound; training stops when epoch ends or this is reached.
         save_steps=100,
         max_grad_norm=0.1,
-        vllm_gpu_memory_utilization=vllm_gpu_memory_utilization,
         report_to="tensorboard",
         output_dir=output_dir,
     )
+    
+    # Load model once - will be used for both inference and training
+    from transformers import AutoModelForCausalLM
     
     if use_cuda:
         logger.info(f"Using GPU: {torch.cuda.get_device_name(0)}")
@@ -278,14 +265,12 @@ def train_grpo_overcooked(
         import os
         os.environ["ACCELERATE_USE_CPU"] = "false"
         os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-        # Try to load model on GPU explicitly before passing to trainer
-        from transformers import AutoModelForCausalLM
+        
         logger.info("Loading model on GPU...")
-        # Force GPU placement - use explicit device_map instead of "auto"
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
             device_map="cuda:0",  # Explicitly place on GPU 0
-            dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
+            torch_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
             low_cpu_mem_usage=True,
         )
         logger.info(f"Model loaded. Device map: {model.hf_device_map if hasattr(model, 'hf_device_map') else 'N/A'}")
@@ -295,11 +280,22 @@ def train_grpo_overcooked(
             logger.info(f"Model parameters on device: {first_param.device}")
     else:
         logger.warning("CUDA not available, using CPU (training will be slow)")
-        model = model_name  # Pass string, let trainer load it
+        logger.info("Loading model on CPU...")
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            device_map="cpu",
+            low_cpu_mem_usage=True,
+        )
+        logger.info("Model loaded on CPU")
     
-    # Initialize trainer
+    # Create LLM generation function using the loaded model
+    logger.info("Creating inference function...")
+    llm_generate_fn = create_llm_generate_fn(model, tokenizer)
+    
+    # Initialize trainer with the same model instance
+    logger.info("Initializing GRPOTrainer...")
     trainer = GRPOTrainer(
-        model=model if use_cuda else model_name,  # Pass pre-loaded model if GPU, otherwise string
+        model=model,  # Use the same model instance for training
         processing_class=tokenizer,
         reward_funcs=[format_reward_func],  # Format reward for proper XML structure
         args=training_args,
@@ -353,8 +349,6 @@ def train_grpo_overcooked(
                 "num_generations": num_generations,
                 "max_prompt_length": max_prompt_length,
                 "max_completion_length": max_completion_length,
-                "use_vllm": use_vllm,
-                "vllm_gpu_memory_utilization": vllm_gpu_memory_utilization,
             })
         except ImportError:
             logger.warning("MLflow requested but not installed. Continuing without MLflow logging.")
@@ -383,6 +377,8 @@ def train_grpo_overcooked(
             output_dir=output_dir,
             iteration=iteration,
             use_mlflow=use_mlflow,
+            save_checkpoint_every_n_episodes=save_checkpoint_every_n_episodes,
+            verbose=verbose,
         )
         
         # Calculate statistics
@@ -429,15 +425,10 @@ def train_grpo_overcooked(
         trainer.train()
         logger.success("Training step completed")
         
-        # Update LLM generation function with new model
-        if hasattr(trainer, 'model'):
-            # Reload model if needed
-            logger.debug("Updating LLM generation function with trained model")
-            llm_generate_fn = create_llm_generate_fn(
-                trainer.model if hasattr(trainer.model, 'name_or_path') else model_name,
-                tokenizer,
-                vllm_engine
-            )
+        # Update LLM generation function with updated model from trainer
+        # The trainer's model is the same instance, but weights have been updated
+        logger.debug("Updating LLM generation function with trained model")
+        llm_generate_fn = create_llm_generate_fn(trainer.model, tokenizer)
         
         logger.success(f"Iteration {iteration + 1}/{num_iterations} complete")
     
@@ -460,25 +451,31 @@ if __name__ == "__main__":
                        help="Layout name")
     parser.add_argument("--num_episodes", type=int, default=10,
                        help="Episodes per iteration")
+    parser.add_argument("--max_steps", type=int, default=400,
+                       help="Maximum steps per episode. Use 1 for a quick training sanity check.")
     parser.add_argument("--num_iterations", type=int, default=100,
                        help="Number of training iterations")
     parser.add_argument("--output_dir", type=str, default="outputs/overcooked_grpo",
                        help="Output directory")
-    parser.add_argument("--use_vllm", action="store_true",
-                       help="Use vLLM for inference")
     parser.add_argument("--use_mlflow", action="store_true",
                        help="Log metrics to MLflow (assumes MLflow is already initialized)")
+    parser.add_argument("--save_checkpoint_every_n_episodes", type=int, default=None,
+                       help="Save trajectory checkpoint every N episodes during generation (e.g., 5). Useful for long-running generation.")
+    parser.add_argument("--verbose", action="store_true",
+                       help="Enable rich display output (slows down execution significantly - use only for debugging)")
     
     args = parser.parse_args()
     
     train_grpo_overcooked(
         model_name=args.model,
         env_name=args.env,
-        env_kwargs={"layout": args.layout, "max_steps": 400},
+        env_kwargs={"layout": args.layout, "max_steps": args.max_steps},
         num_episodes_per_iteration=args.num_episodes,
+        max_steps=args.max_steps,
         num_iterations=args.num_iterations,
         output_dir=args.output_dir,
-        use_vllm=args.use_vllm,
         use_mlflow=args.use_mlflow,
+        save_checkpoint_every_n_episodes=args.save_checkpoint_every_n_episodes,
+        verbose=args.verbose,
     )
 

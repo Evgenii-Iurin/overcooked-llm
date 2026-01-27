@@ -223,14 +223,15 @@ def display_step_summary(
         plan_reward = 0.0
         if plan_status and llm_responses:
             agent_id_str = f"agent_{agent_id}"
+            plan_valid_key = f"plan_valid_{agent_id_str}"
+            is_valid = plan_status.get(plan_valid_key, False)
             
-            # Plan parsing reward
-            if llm_responses.get(agent_id_str) and llm_responses[agent_id_str].plan:
+            # Plan parsing reward (only if plan is also valid)
+            if llm_responses.get(agent_id_str) and llm_responses[agent_id_str].plan and is_valid:
                 plan_reward += 0.1
             
             # Plan validation reward
-            plan_valid_key = f"plan_valid_{agent_id_str}"
-            if plan_status.get(plan_valid_key, False):
+            if is_valid:
                 plan_reward += 0.3
             
             # Plan execution reward

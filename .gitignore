@@ -205,3 +205,11 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# mlflow
+mlflow.db
+
+# vscode
+.vscode/settings.json
+
+outputs/

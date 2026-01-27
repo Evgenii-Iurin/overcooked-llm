@@ -31,15 +31,18 @@ class OvercookedLLMWrapper:
         self,
         env: OvercookedV2,
         llm_generate_fn: Callable[[List[Dict[str, str]]], str],
+        verbose: bool = True,
     ):
         """Initialize wrapper.
         
         Args:
             env: OvercookedV2 environment instance
             llm_generate_fn: Function that takes a prompt (list of message dicts) and returns LLM response string
+            verbose: Whether to display rich output (default: True). Set to False for faster generation.
         """
         self.env = env
         self.llm_generate_fn = llm_generate_fn
+        self.verbose = verbose
         self.executor = ActionExecutor(env)
         
         # Action buffers for multi-step plan execution
@@ -184,21 +187,22 @@ class OvercookedLLMWrapper:
                 self.current_plans[agent_key] = plan
                 self.action_buffers[agent_key] = executor_actions
                 
-                # Display agent context with rich
-                display_agent_context(
-                    agent_id=agent_id,
-                    step=step,
-                    obs_text=obs_text,
-                    prompt=prompt,
-                    raw_response=llm_response.raw_response,
-                    parsed_response=llm_response,
-                    plan=plan,
-                    validation_result=validation_result,
-                    executor_actions=executor_actions,
-                    executor_info=executor_info,
-                    previous_validation_errors=self.previous_validation_errors[agent_key],
-                    env=self.env,
-                )
+                # Display agent context with rich (only if verbose)
+                if self.verbose:
+                    display_agent_context(
+                        agent_id=agent_id,
+                        step=step,
+                        obs_text=obs_text,
+                        prompt=prompt,
+                        raw_response=llm_response.raw_response,
+                        parsed_response=llm_response,
+                        plan=plan,
+                        validation_result=validation_result,
+                        executor_actions=executor_actions,
+                        executor_info=executor_info,
+                        previous_validation_errors=self.previous_validation_errors[agent_key],
+                        env=self.env,
+                    )
             else:
                 # Plan hasn't changed, use existing buffer
                 # If we're using buffer, it means plan was already validated and executed
@@ -273,8 +277,12 @@ class OvercookedLLMWrapper:
         num_deliveries = 0
         
         for step in range(max_steps):
-            console.print(f"\n[bold bright_white]{'='*80}[/bold bright_white]")
-            console.print(f"[bold bright_white]Step {step}[/bold bright_white]\n")
+            if self.verbose:
+                console.print(f"\n[bold bright_white]{'='*80}[/bold bright_white]")
+                console.print(f"[bold bright_white]Step {step}[/bold bright_white]\n")
+            else:
+                # Minimal output: just track step number
+                print(f"Step {step}")
             
             # Process with LLM
             actions, conversation_history, llm_responses, plan_status = self.step_with_llm(
@@ -292,14 +300,17 @@ class OvercookedLLMWrapper:
             step_reward = sum(rewards.values())
             episode_reward += step_reward
             
-            # Display step summary with plan rewards
-            display_step_summary(step, actions, rewards, episode_reward, plan_status, llm_responses)
+            # Display step summary with plan rewards (only if verbose)
+            if self.verbose:
+                display_step_summary(step, actions, rewards, episode_reward, plan_status, llm_responses)
             
             if state_new.new_correct_delivery:
                 num_deliveries += 1
-                console.print(f"[bold green]✓ Correct delivery! Total deliveries: {num_deliveries}[/bold green]")
+                if self.verbose:
+                    console.print(f"[bold green]✓ Correct delivery! Total deliveries: {num_deliveries}[/bold green]")
             
-            console.print()
+            if self.verbose:
+                console.print()
             
             # Store step
             step_data = TrajectoryStep(
@@ -333,7 +344,8 @@ class OvercookedLLMWrapper:
             
             # Check if done
             if dones.get("__all__", False) or state_new.terminal:
-                console.print(f"[bold yellow]Episode terminated at step {step + 1}[/bold yellow]")
+                if self.verbose:
+                    console.print(f"[bold yellow]Episode terminated at step {step + 1}[/bold yellow]")
                 break
             
             # Update for next iteration
@@ -348,9 +360,14 @@ class OvercookedLLMWrapper:
             final_conversation_history=conversation_history,
         )
         
-        console.print(f"\n[bold green]Episode completed:[/bold green] {len(steps)} steps, "
-                     f"{len(conversation_history)} messages, {num_deliveries} deliveries, "
-                     f"reward={episode_reward:.2f}\n")
+        # Always print episode summary (minimal if not verbose)
+        if self.verbose:
+            console.print(f"\n[bold green]Episode completed:[/bold green] {len(steps)} steps, "
+                         f"{len(conversation_history)} messages, {num_deliveries} deliveries, "
+                         f"reward={episode_reward:.2f}\n")
+        else:
+            # Clear the step counter line and print summary
+            print(f"\nEpisode completed: {len(steps)} steps, {num_deliveries} deliveries, reward={episode_reward:.2f}")
         
         return trajectory
     

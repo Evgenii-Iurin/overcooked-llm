@@ -23,6 +23,9 @@ def generate_trajectories(
     rng_key: Optional[jax.random.PRNGKey] = None,
     use_mlflow: bool = False,
     iteration: Optional[int] = None,
+    save_checkpoint_every_n_episodes: Optional[int] = None,
+    output_dir: Optional[str] = None,
+    verbose: bool = False,
 ) -> List[Trajectory]:
     """Generate trajectories from environment using LLM.
     
@@ -34,6 +37,9 @@ def generate_trajectories(
         rng_key: Random key for environment
         use_mlflow: Whether to log metrics to MLflow during generation
         iteration: Current iteration number (for MLflow step tracking)
+        save_checkpoint_every_n_episodes: Optional. If set, save trajectory checkpoint every N episodes
+        output_dir: Output directory for checkpoints (only used if save_checkpoint_every_n_episodes is set)
+        verbose: Whether to display rich output (default: False for faster generation)
         
     Returns:
         List of trajectories
@@ -42,7 +48,7 @@ def generate_trajectories(
         rng_key = jax.random.PRNGKey(0)
     
     logger.info(f"Starting trajectory generation: {num_episodes} episodes, max {max_steps} steps each")
-    wrapper = OvercookedLLMWrapper(env, llm_generate_fn)
+    wrapper = OvercookedLLMWrapper(env, llm_generate_fn, verbose=verbose)
     trajectories = []
     
     # Initialize MLflow if needed
@@ -57,19 +63,40 @@ def generate_trajectories(
         mlflow = None
     
     for episode in range(num_episodes):
-        logger.info(f"Episode {episode + 1}/{num_episodes}: Starting...")
+        if verbose:
+            logger.info(f"Episode {episode + 1}/{num_episodes}: Starting...")
+        else:
+            print(f"Episode {episode + 1}/{num_episodes}...", end=" ", flush=True)
+        
         rng_key, episode_key = jax.random.split(rng_key)
         trajectory = wrapper.collect_trajectory(episode_key, max_steps=max_steps)
         trajectories.append(trajectory)
         wrapper.reset_action_buffers()
         
         # Log episode statistics
-        logger.success(
-            f"Episode {episode + 1}/{num_episodes} completed: "
-            f"length={trajectory.episode_length}, "
-            f"reward={trajectory.episode_reward:.2f}, "
-            f"deliveries={trajectory.num_deliveries}"
-        )
+        if verbose:
+            logger.success(
+                f"Episode {episode + 1}/{num_episodes} completed: "
+                f"length={trajectory.episode_length}, "
+                f"reward={trajectory.episode_reward:.2f}, "
+                f"deliveries={trajectory.num_deliveries}"
+            )
+        else:
+            print(f"✓ ({trajectory.episode_length} steps, reward={trajectory.episode_reward:.2f}, deliveries={trajectory.num_deliveries})")
+        
+        # Save checkpoint every N episodes if requested
+        if (save_checkpoint_every_n_episodes is not None and 
+            output_dir and 
+            (episode + 1) % save_checkpoint_every_n_episodes == 0):
+            from .artifacts import save_trajectories
+            checkpoint_prefix = f"trajectories_checkpoint_ep{episode + 1}"
+            save_trajectories(
+                trajectories, 
+                output_dir, 
+                prefix=checkpoint_prefix,
+                iteration=iteration
+            )
+            logger.info(f"Checkpoint saved: {len(trajectories)} trajectories after episode {episode + 1}")
         
         # Log metrics to MLflow in real-time
         if use_mlflow and mlflow is not None:
@@ -185,6 +212,8 @@ def generate_grpo_dataset(
     output_dir: Optional[str] = None,
     iteration: Optional[int] = None,
     use_mlflow: bool = False,
+    save_checkpoint_every_n_episodes: Optional[int] = None,
+    verbose: bool = False,
 ) -> Tuple[Dataset, List[Trajectory]]:
     """Generate GRPO dataset from environment rollouts.
     
@@ -199,6 +228,9 @@ def generate_grpo_dataset(
         output_dir: Output directory for artifacts. All artifacts will be saved to {output_dir}/artifacts/
         iteration: Optional iteration number for artifact naming
         use_mlflow: Whether to log metrics to MLflow during generation
+        save_checkpoint_every_n_episodes: Optional. If set, save trajectory checkpoint every N episodes
+            (e.g., 5 means save after episodes 5, 10, 15, ...). Useful for long-running generation.
+        verbose: Whether to display rich output during generation (default: False for faster generation)
         
     Returns:
         Tuple of (GRPO-compatible dataset, list of trajectories)
@@ -212,6 +244,9 @@ def generate_grpo_dataset(
         rng_key=rng_key,
         use_mlflow=use_mlflow,
         iteration=iteration,
+        save_checkpoint_every_n_episodes=save_checkpoint_every_n_episodes,
+        output_dir=output_dir if save_artifacts else None,
+        verbose=verbose,
     )
     
     # Save trajectories if requested

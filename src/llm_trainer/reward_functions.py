@@ -92,18 +92,18 @@ def plan_executability_reward_func(
     reward = 0.0
     
     for step in trajectory.steps:
-        # Check if plans are parseable
-        if step.llm_response_agent0.plan:
-            reward += 1.0
-        else:
-            reward -= 0.5
+        # Check if plans are parseable (only reward if also valid)
+        if step.llm_response_agent0.plan and step.plan_valid_agent0:
+            reward += 1.0  # Parsing reward (only for valid plans)
+        elif not step.llm_response_agent0.plan:
+            reward -= 0.5  # Penalty for no plan
         
-        if step.llm_response_agent1.plan:
-            reward += 1.0
-        else:
-            reward -= 0.5
+        if step.llm_response_agent1.plan and step.plan_valid_agent1:
+            reward += 1.0  # Parsing reward (only for valid plans)
+        elif not step.llm_response_agent1.plan:
+            reward -= 0.5  # Penalty for no plan
         
-        # Check if plans passed validation (higher reward than just parsing)
+        # Check if plans passed validation (additional reward on top of parsing)
         if step.plan_valid_agent0:
             reward += 1.5  # Validation passed
         if step.plan_valid_agent1:
@@ -143,34 +143,60 @@ def plan_executability_reward_func(
     return reward
 
 
+def _completion_to_text(completion) -> str:
+    """Extract plain text from one completion. Handles TRL GRPOTrainer formats.
+    
+    - str: returned as-is.
+    - list of dicts (chat): concatenate 'content' or 'text' from each item.
+    - list of str: join.
+    - otherwise: str(completion).
+    """
+    if isinstance(completion, str):
+        return completion
+    if isinstance(completion, list) and len(completion) > 0:
+        parts = []
+        for x in completion:
+            if isinstance(x, dict):
+                parts.append(x.get("content", x.get("text", "")) or "")
+            else:
+                parts.append(str(x) if x is not None else "")
+        return " ".join(parts)
+    return str(completion) if completion is not None else ""
+
+
 def format_reward_func(
-    completions: List[str],
+    completions,
+    prompts=None,
+    completion_ids=None,
     **kwargs
 ) -> List[float]:
     """Reward for proper XML format in LLM responses.
     
-    Args:
-        completions: List of LLM completion strings
-        **kwargs: Additional arguments (ignored)
-        
+    Compatible with TRL GRPOTrainer: receives prompts=, completions=, completion_ids=.
+    Each completion can be a string or a list of chat dicts (e.g. [{"role":"assistant","content":"..."}]).
+    Also supports internal usage: format_reward_func(list_of_strings).
+    
     Returns:
         List of format rewards (one per completion)
     """
-    rewards = []
+    if completions is None:
+        return []
     
+    rewards = []
     for completion in completions:
+        text = _completion_to_text(completion)
         reward = 0.0
         
         # Check for communication tag
-        if re.search(r'<communication>.*?</communication>', completion, re.DOTALL):
+        if re.search(r'<communication>.*?</communication>', text, re.DOTALL):
             reward += 1.0
         
         # Check for plan tag
-        if re.search(r'<plan>.*?</plan>', completion, re.DOTALL):
+        if re.search(r'<plan>.*?</plan>', text, re.DOTALL):
             reward += 1.0
         
         # Check for all required sub-tags in communication
-        comm_match = re.search(r'<communication>.*?</communication>', completion, re.DOTALL)
+        comm_match = re.search(r'<communication>.*?</communication>', text, re.DOTALL)
         if comm_match:
             comm_text = comm_match.group(0)
             if '<to_agent>' in comm_text and '</to_agent>' in comm_text:
@@ -179,7 +205,7 @@ def format_reward_func(
                 reward += 0.5
         
         # Check for action tag in plan
-        plan_match = re.search(r'<plan>.*?</plan>', completion, re.DOTALL)
+        plan_match = re.search(r'<plan>.*?</plan>', text, re.DOTALL)
         if plan_match:
             plan_text = plan_match.group(0)
             if '<action>' in plan_text and '</action>' in plan_text:
@@ -263,10 +289,11 @@ def compute_step_rewards(
     rewards["agent_1"] += format_rewards[1] * 0.1
     
     # Plan parsing (individual) - small reward for parsing
-    if step.llm_response_agent0.plan:
+    # Only give parsing reward if plan is also valid (to avoid rewarding invalid plans)
+    if step.llm_response_agent0.plan and step.plan_valid_agent0:
         rewards["agent_0"] += 0.1
     
-    if step.llm_response_agent1.plan:
+    if step.llm_response_agent1.plan and step.plan_valid_agent1:
         rewards["agent_1"] += 0.1
     
     # Plan validation (individual) - medium reward for validation
